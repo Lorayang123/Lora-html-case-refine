@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""扫描 HTML 中可能的“内部制作痕迹”文本。
+
+用途：对客展示前，快速发现并清理不适合对外展示的词。
+
+示例：
+  python3 scripts/scan_internal_copy.py --file deploy_case_v3/index.html
+
+退出码：
+- 找到命中：退出码 2（便于在流水线里当作提醒）
+- 未找到命中：退出码 0
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+DEFAULT_PATTERNS = [
+    r"\\bTODO\\b",
+    r"占位",
+    r"草稿",
+    r"内部",
+    r"仅供",
+    r"校准",
+    r"终版",
+    r"口径",
+    r"建议",
+    r"制作",
+    r"模板体系",
+    r"对客展示",
+    r"HTML\\s*单页",
+]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Scan HTML for internal-facing copy")
+    parser.add_argument("--file", required=True, help="path to html file")
+    parser.add_argument(
+        "--pattern",
+        action="append",
+        default=[],
+        help="regex pattern to search (repeatable). If not provided, uses default patterns.",
+    )
+
+    args = parser.parse_args()
+
+    file_path = Path(args.file)
+    if not file_path.exists() or not file_path.is_file():
+        raise SystemExit(f"❌ file not found: {file_path}")
+
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+    patterns = args.pattern if args.pattern else DEFAULT_PATTERNS
+
+    hits: list[tuple[int, str, str]] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines, start=1):
+        for p in patterns:
+            if re.search(p, line, flags=re.IGNORECASE):
+                hits.append((i, p, line.strip()))
+
+    if not hits:
+        print("✅ no internal-facing copy detected")
+        return
+
+    print(f"⚠️ detected {len(hits)} suspicious lines in: {file_path}")
+    for ln, p, snippet in hits[:200]:
+        print(f"- L{ln}: /{p}/ -> {snippet}")
+
+    if len(hits) > 200:
+        print(f"... truncated, total hits: {len(hits)}")
+
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""复制一个已存在的部署目录，生成新版本目录。
+
+用途：支持“截图驱动多轮微调”时的可回滚版本管理。
+
+示例：
+  python3 scripts/bump_version_dir.py --src deploy_xxx_v2 --dst deploy_xxx_v3
+
+约束：
+- 默认要求 dst 不存在，避免误覆盖。
+- 只做文件复制，不做内容修改。
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Copy a deploy directory to a new version directory")
+    parser.add_argument("--src", required=True, help="source directory path, e.g. deploy_case_v2")
+    parser.add_argument("--dst", required=True, help="destination directory path, e.g. deploy_case_v3")
+    args = parser.parse_args()
+
+    src = Path(args.src)
+    dst = Path(args.dst)
+
+    if not src.exists() or not src.is_dir():
+        raise SystemExit(f"❌ src directory not found: {src}")
+
+    if dst.exists():
+        raise SystemExit(f"❌ dst already exists (refuse to overwrite): {dst}")
+
+    shutil.copytree(src, dst)
+    print(f"✅ copied: {src} -> {dst}")
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""下载外部素材到本地，并写入可追溯记录。
+
+用途：把“外部网页/图片链接”中的真实素材落盘到当前 HTML 项目的 assets/，避免线上部署时依赖不稳定的外链。
+
+示例：
+  python3 scripts/download_asset.py \
+    --url "https://example.com/a.jpg" \
+    --out "deploy_case_v3/assets/founder.jpg" \
+    --referer "https://example.com/article" \
+    --manifest "deploy_case_v3/assets/asset_manifest.jsonl"
+
+注意：
+- 这是“下载+记录”，不做任何 AI 生成或内容伪造。
+- 如果站点需要登录/验证码导致下载失败，应停止并改走阻塞说明，让用户提供可用直链或上传文件。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import da
